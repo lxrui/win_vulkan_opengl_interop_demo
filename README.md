@@ -1,1 +1,1 @@
-# win_vulkan_opengl_interop_demo
+# Using vulkan external memory to share texture with OpenGL on Windows
