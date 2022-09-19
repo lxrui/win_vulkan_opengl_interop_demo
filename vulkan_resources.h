@@ -634,7 +634,7 @@ namespace vulkanResources {
 		return joinString('.', versionAsStringList);
 	}
 };
-
+#define CHECK_VOID
 #define CHECK_RETURN_IF(cond, ret)																	\
 do { 																								\
 	if (cond) {																						\

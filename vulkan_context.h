@@ -45,6 +45,7 @@ private:
     VkPhysicalDeviceMemoryProperties physical_device_memory_props_ = {};
 };
 
+template <typename T>
 class VulkanResourceOnDevice {
 public:
     explicit VulkanResourceOnDevice(const std::shared_ptr<VulkanContext>& ctx) : ctx_(ctx) {
@@ -54,10 +55,12 @@ public:
 	VulkanResourceOnDevice(const VulkanResourceOnDevice&) = delete;
     VulkanResourceOnDevice& operator=(const VulkanResourceOnDevice&) = delete;
     virtual ~VulkanResourceOnDevice() {};
-
+    T VkType() { return vk_resource_; }
+    
 protected:	
     std::shared_ptr<VulkanContext> ctx_;
     VkDevice device_;
+    T vk_resource_ = VK_NULL_HANDLE;
 };
 
 #endif // __VULKAN_CONTEXT_H__

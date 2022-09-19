@@ -215,7 +215,7 @@ int VulkanContext::CreateDevice() {
     }
 
     CHECK_RETURN_IF(queue_index_ >= queue_family_count, -1);
-    std::cout << "queue family count:" << queue_family_count << " found index:" << queue_index_;
+    std::cout << "queue family count:" << queue_family_count << " found index:" << queue_index_ << std::endl;
 
     VkDeviceQueueCreateInfo queue_create_info = {};
     float queue_priorities = 1.0f;

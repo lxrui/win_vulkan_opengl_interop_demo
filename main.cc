@@ -8,6 +8,12 @@
 #include <map>
 #include <assert.h>
 #include "vulkan_context.h"
+#include "vulkan_texture.h"
+#include "vulkan_sampler.h"
+#include "vulkan_command_buffer.h"
+#include "vulkan_shader.h"
+#include "vulkan_compute_pipeline.h"
+#include "shaders/vk_kernel_sources.h"
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 #include "shader_s.h"
@@ -15,9 +21,16 @@
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void processInput(GLFWwindow *window);
+GLuint GetGLExternalTexture(const HANDLE mem_hnd, size_t mem_size, GLenum internal_format, int width, int height);
+
+std::shared_ptr<VulkanContext> g_vk_context;
+std::shared_ptr<VulkanTexture> g_vk_dst_tex;
+std::shared_ptr<VulkanComputePipeline> g_vk_pipeline;
+std::shared_ptr<VulkanCommandBuffer> g_vk_cmd_buf;
+GLuint texture1;
+std::map<GLuint, GLuint> g_gl_ext_texs;
 
 int main(int argc, char** argv) {
-
     // glfw: initialize and configure
     // ------------------------------
     glfwInit();
@@ -25,7 +38,9 @@ int main(int argc, char** argv) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 5);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-    GLFWwindow *window = glfwCreateWindow(800, 600, "VulkanGL", NULL, NULL);
+    const int win_w = 1600;
+    const int win_h = 900; 
+    GLFWwindow *window = glfwCreateWindow(win_w, win_h, "VulkanGL", NULL, NULL);
     if (window == NULL) {
         std::cout << "Failed to create GLFW window" << std::endl;
         glfwTerminate();
@@ -39,9 +54,84 @@ int main(int argc, char** argv) {
         return -1;
     }
 
+    // Load vulkan
+    g_vk_context = std::make_shared<VulkanContext>();
+    CHECK_RETURN_IF(0 != g_vk_context->Init(), -1);
+    // create vulkan shader
+    auto vk_shader = std::make_shared<VulkanShader>(g_vk_context);
+    CHECK_RETURN_IF(0 != vk_shader->CreateShader(vk_copy_kernel_comp, vk_copy_kernel_comp_len), -1);
+
     // build and compile our shader zprogram
     // ------------------------------------
     Shader render_image_shader(render_image_vs, render_image_fs);
+
+
+    // load and create textures
+    // -------------------------
+    
+    // load image from file
+    int image_w, image_h, image_cn;
+    // stbi_set_flip_vertically_on_load(true); // tell stb_image.h to flip loaded texture's on the y-axis.
+    unsigned char *image_file_data = stbi_load("1.jpg", &image_w, &image_h, &image_cn, 4);
+    CHECK_RETURN_IF(!image_file_data, -1);
+
+    // create vulkan ext texture
+    HANDLE src_mem_hnd;
+    size_t src_mem_size;
+    auto vk_src_tex = std::make_shared<VulkanTexture>(g_vk_context);
+    int vk_ret = vk_src_tex->CreateWinGlSharedTexture(VK_FORMAT_R8G8B8A8_UNORM,
+                                                      image_w,
+                                                      image_h,
+                                                      VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT,
+                                                      VK_IMAGE_TILING_OPTIMAL,
+                                                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                                      VK_IMAGE_LAYOUT_UNDEFINED,
+                                                      src_mem_hnd,
+                                                      src_mem_size);
+    CHECK_RETURN_IF(0 != vk_ret, vk_ret);
+    // opengl texture0
+    GLuint texture0 = GetGLExternalTexture(src_mem_hnd, src_mem_size, GL_RGBA8, image_w, image_h);
+    CHECK_RETURN_IF(0 == texture0, -1);
+    // upload image data
+    glBindTexture(GL_TEXTURE_2D, texture0);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, image_w, image_h, GL_RGBA, GL_UNSIGNED_BYTE, image_file_data);
+    stbi_image_free(image_file_data);
+
+
+    HANDLE dst_mem_hnd;
+    size_t dst_mem_size;
+    g_vk_dst_tex = std::make_shared<VulkanTexture>(g_vk_context);
+    vk_ret = g_vk_dst_tex->CreateWinGlSharedTexture(VK_FORMAT_R8G8B8A8_UNORM,
+                                                  win_w,
+                                                  win_h,
+                                                  VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                                                  VK_IMAGE_TILING_OPTIMAL,
+                                                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                                  VK_IMAGE_LAYOUT_UNDEFINED,
+                                                  dst_mem_hnd,
+                                                  dst_mem_size);
+    CHECK_RETURN_IF(0 != vk_ret, vk_ret);
+    // opengl texture1
+    texture1 = GetGLExternalTexture(dst_mem_hnd, dst_mem_size, GL_RGBA8, win_w, win_h);
+    CHECK_RETURN_IF(0 == texture1, -1);
+
+    auto vk_sampler = std::make_shared<VulkanSampler>(g_vk_context);
+    CHECK_RETURN_IF(0 != vk_sampler->CreateSampler(VK_FILTER_LINEAR, VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE), -1);
+
+    g_vk_pipeline = std::make_shared<VulkanComputePipeline>(g_vk_context);
+    g_vk_pipeline->Bind(0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, vk_src_tex->DescriptorInfo());
+    g_vk_pipeline->Bind(1, VK_DESCRIPTOR_TYPE_SAMPLER, vk_sampler->DescriptorInfo());
+    g_vk_pipeline->Bind(2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, g_vk_dst_tex->DescriptorInfo());
+    CHECK_RETURN_IF(0 != g_vk_pipeline->CreatePipeline(vk_shader), -1);
+
+    g_vk_cmd_buf = std::make_shared<VulkanCommandBuffer>(g_vk_context);
+    CHECK_RETURN_IF(0 != g_vk_cmd_buf->Create(), -1);
+    g_vk_cmd_buf->Begin();
+    g_vk_cmd_buf->BindPipeline(g_vk_pipeline);
+    g_vk_cmd_buf->Dispatch(win_w, win_h);
+    g_vk_cmd_buf->End();
+
+    glfwSetWindowSize(window, win_w, win_h);
 
     // set up vertex data (and buffer(s)) and configure vertex attributes
     // ------------------------------------------------------------------
@@ -76,32 +166,6 @@ int main(int argc, char** argv) {
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
 
-    // load and create a texture 
-    // -------------------------
-    unsigned int texture1;
-    // texture 1
-    // ---------
-    glGenTextures(1, &texture1);
-    glBindTexture(GL_TEXTURE_2D, texture1); 
-     // set the texture wrapping parameters
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);	// set texture wrapping to GL_REPEAT (default wrapping method)
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    // set texture filtering parameters
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    // load image, create texture and generate mipmaps
-    int image_w, image_h, image_cn;
-    // stbi_set_flip_vertically_on_load(true); // tell stb_image.h to flip loaded texture's on the y-axis.
-    unsigned char *image_file_data = stbi_load("1.jpg", &image_w, &image_h, &image_cn, 4);
-    if (image_file_data) {
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, image_w, image_h, 0, GL_RGBA, GL_UNSIGNED_BYTE, image_file_data);
-        glGenerateMipmap(GL_TEXTURE_2D);
-    } else {
-        std::cout << "Failed to load texture" << std::endl;
-    }
-    stbi_image_free(image_file_data);
-    glfwSetWindowSize(window, image_w, image_h);
-
     // tell opengl for each sampler to which texture unit it belongs to (only has to be done once)
     // -------------------------------------------------------------------------------------------
     render_image_shader.use(); // don't forget to activate/use the shader before setting uniforms!
@@ -117,6 +181,10 @@ int main(int argc, char** argv) {
         // input
         // -----
         processInput(window);
+
+        // Vulkan process
+        g_vk_cmd_buf->Submit();
+        g_vk_cmd_buf->WaitComplete();
 
         // render
         // ------
@@ -143,221 +211,14 @@ int main(int argc, char** argv) {
     glDeleteBuffers(1, &VBO);
     glDeleteBuffers(1, &EBO);
 
+    for (auto ext_tex : g_gl_ext_texs) {
+        glDeleteMemoryObjectsEXT(1, &(ext_tex.second));
+        glDeleteTextures(1, &(ext_tex.first));
+    }
+
     // glfw: terminate, clearing all previously allocated GLFW resources.
     // ------------------------------------------------------------------
     glfwTerminate();
-
-/*
-    VkResult vkRes;
-
-    uint32_t instanceApiVersion;
-    // Get the max. supported Vulkan Version if vkEnumerateInstanceVersion is available (loader version 1.1 and up)
-    PFN_vkEnumerateInstanceVersion vkEnumerateInstanceVersion = reinterpret_cast<PFN_vkEnumerateInstanceVersion>(vkGetInstanceProcAddr(nullptr, "vkEnumerateInstanceVersion"));
-    if (vkEnumerateInstanceVersion) {
-        vkEnumerateInstanceVersion(&instanceApiVersion);
-    } else {
-        instanceApiVersion = VK_API_VERSION_1_0;
-    }
-
-    VkApplicationInfo appInfo = {};
-    appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    appInfo.pApplicationName = "VulkanDemo";
-    appInfo.applicationVersion = 1;
-    appInfo.pEngineName = "VulkanDemo";
-    appInfo.engineVersion = 1;
-    appInfo.apiVersion = instanceApiVersion;
-
-    // Create Vulkan instance
-    VkInstanceCreateInfo instanceCreateInfo = {};
-    instanceCreateInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-    instanceCreateInfo.pApplicationInfo = &appInfo;
-
-    std::vector<const char*> instanceEnabledExtensions = {};
-
-    // Get instance extensions
-    std::vector<VkExtensionProperties> instanceExtensions;
-    do {
-        uint32_t extCount;
-        vkRes = vkEnumerateInstanceExtensionProperties(NULL, &extCount, NULL);
-        if (vkRes != VK_SUCCESS) {
-            break;
-        }
-        std::vector<VkExtensionProperties> extensions(extCount);
-        vkRes = vkEnumerateInstanceExtensionProperties(NULL, &extCount, &extensions.front());
-        instanceExtensions.insert(instanceExtensions.end(), extensions.begin(), extensions.end());
-    } while (vkRes == VK_INCOMPLETE);
-
-    // Check support for new property and feature queries
-    bool deviceProperties2Available = false;
-    for (auto& ext : instanceExtensions) {
-        if (strcmp(ext.extensionName, VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME) == 0) {
-            deviceProperties2Available = true;
-            instanceEnabledExtensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
-            continue;
-        }
-#define ENABLE_INSTANCE_EXT(EXT_NAME) \
-if (0 == strcmp(ext.extensionName, EXT_NAME)) { \
-    instanceEnabledExtensions.push_back(EXT_NAME); \
-    continue; \
-}
-
-        ENABLE_INSTANCE_EXT(VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME)
-        ENABLE_INSTANCE_EXT(VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME)
-
-#undef ENABLE_INSTANCE_EXT
-    }
-
-    instanceCreateInfo.ppEnabledExtensionNames = instanceEnabledExtensions.data();
-    instanceCreateInfo.enabledExtensionCount = (uint32_t)instanceEnabledExtensions.size();
-
-    // Create vulkan Instance
-    VkInstance instance;
-    vkRes = vkCreateInstance(&instanceCreateInfo, nullptr, &instance);
-    if (vkRes != VK_SUCCESS)
-    {
-        // QString error;
-        if (vkRes == VK_ERROR_INCOMPATIBLE_DRIVER)
-        {
-            printf("No compatible Vulkan driver found!\nThis version requires a Vulkan driver that is compatible with at least Vulkan 1.1");
-        }
-        else
-        {
-            printf("Could not create Vulkan instance!\nError: %s", vulkanResources::resultString(vkRes).c_str());
-        }
-        return false;
-    }
-
-    for (auto& ext : instanceEnabledExtensions) {
-        printf("InstanceEnabledExtensions: %s\n", ext);
-    }
-
-    if (deviceProperties2Available) {
-        pfnGetPhysicalDeviceFeatures2KHR = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2KHR>(vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceFeatures2KHR"));
-        if (!pfnGetPhysicalDeviceFeatures2KHR) {
-            deviceProperties2Available = false;
-            printf("Could not get function pointer for vkGetPhysicalDeviceFeatures2KHR (even though extension is enabled!)\nNew features and properties won't be displayed!\n");
-        }
-        pfnGetPhysicalDeviceProperties2KHR = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2KHR>(vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceProperties2KHR"));
-        if (!pfnGetPhysicalDeviceProperties2KHR) {
-            deviceProperties2Available = false;
-            printf("Could not get function pointer for vkGetPhysicalDeviceProperties2KHR (even though extension is enabled!)\nNew features and properties won't be displayed!\n");
-        }
-    }
-
-    pfnGetPhysicalDeviceSurfaceSupportKHR = reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceSupportKHR>(vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceSurfaceSupportKHR"));
-
-    uint32_t numGPUs;
-    // Enumerate devices
-    vkRes = vkEnumeratePhysicalDevices(instance, &numGPUs, NULL);
-    if (vkRes != VK_SUCCESS)
-    {
-        printf("Could not enumerate device count!\n");
-        return -1;
-    }
-    std::vector<VkPhysicalDevice> vulkanDevices;
-    vulkanDevices.resize(numGPUs);
-
-    vkRes = vkEnumeratePhysicalDevices(instance, &numGPUs, &vulkanDevices.front());
-    if (vkRes != VK_SUCCESS)
-    {
-        printf("Could not enumerate physical devices!\n");
-        return -1;
-    }
-
-    std::vector<VkDevice> vk_devices; 
-    for (auto physi_device : vulkanDevices) {
-        VkPhysicalDeviceProperties props = {};
-        vkGetPhysicalDeviceProperties(physi_device, &props);
-        printf("Device \"%s\"\n", props.deviceName);
-
-        // extensions
-        std::vector<VkExtensionProperties> extensions;
-        do {
-            uint32_t extCount;
-            vkRes = vkEnumerateDeviceExtensionProperties(physi_device, NULL, &extCount, NULL);
-            assert(!vkRes);
-            std::vector<VkExtensionProperties> exts(extCount);
-            vkRes = vkEnumerateDeviceExtensionProperties(physi_device, NULL, &extCount, &exts.front());
-            for (auto& ext : exts)
-                extensions.push_back(ext);
-        } while (vkRes == VK_INCOMPLETE);
-        assert(!vkRes);
-
-        // queue
-        uint32_t queueFamilyCount;
-        vkGetPhysicalDeviceQueueFamilyProperties(physi_device, &queueFamilyCount, NULL);
-        assert(queueFamilyCount > 0);
-        std::vector<VkQueueFamilyProperties> queueFamilyProperties(queueFamilyCount);
-        vkGetPhysicalDeviceQueueFamilyProperties(physi_device, &queueFamilyCount, &queueFamilyProperties.front());
-
-        VkPhysicalDeviceMemoryProperties mem_props = {};
-        vkGetPhysicalDeviceMemoryProperties(physi_device, &mem_props);
-
-        float queuePriorities[1] = { 1.0f };
-        VkDeviceQueueCreateInfo queueCreateInfo = {};
-        for (uint32_t i = 0; i < queueFamilyProperties.size(); ++i)
-        {
-            if (queueFamilyProperties[i].queueFlags & VK_QUEUE_COMPUTE_BIT) {
-                queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-                queueCreateInfo.queueFamilyIndex = i;
-                queueCreateInfo.queueCount = 1;
-                queueCreateInfo.pQueuePriorities = queuePriorities;
-                break;
-            }
-        }
-
-        std::vector<const char *> deviceEnabledExtensions;
-        for (auto& ext : extensions) {
-#define ENABLE_DEVICE_EXT(EXT_NAME) \
-if (0 == strcmp(ext.extensionName, EXT_NAME)) { \
-    deviceEnabledExtensions.push_back(EXT_NAME); \
-    continue; \
-}
-
-            ENABLE_DEVICE_EXT(VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME)
-            ENABLE_DEVICE_EXT(VK_KHR_BIND_MEMORY_2_EXTENSION_NAME)
-            ENABLE_DEVICE_EXT(VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME)
-            ENABLE_DEVICE_EXT(VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME)
-            ENABLE_DEVICE_EXT(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME)
-            ENABLE_DEVICE_EXT(VK_KHR_SAMPLER_YCBCR_CONVERSION_EXTENSION_NAME)
-            ENABLE_DEVICE_EXT(VK_EXT_GLOBAL_PRIORITY_EXTENSION_NAME)
-            ENABLE_DEVICE_EXT(VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME)
-
-#undef ENABLE_DEVICE_EXT
-        }
-
-        // Init device
-
-        VkDeviceCreateInfo info = {};
-        info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-        info.pQueueCreateInfos = &queueCreateInfo;
-        info.queueCreateInfoCount = 1;
-        info.enabledLayerCount = 0;
-        if (deviceEnabledExtensions.size() > 0) {
-            info.enabledExtensionCount = (uint32_t)deviceEnabledExtensions.size();
-            info.ppEnabledExtensionNames = deviceEnabledExtensions.data();
-        };
-
-        VkDevice vk_device;
-        vkRes = vkCreateDevice(physi_device, &info, nullptr, &vk_device);
-        if (vkRes != VK_SUCCESS)
-        {
-            printf("Could not create a Vulkan device!\nError: %s\n", vulkanResources::resultString(vkRes).c_str());
-            exit(EXIT_FAILURE);
-        }
-
-        for (auto& ext : deviceEnabledExtensions) {
-            printf("DeviceEnabledExtensions: %s\n", ext);
-        }
-        vk_devices.push_back(vk_device);
-    }
-
-    for (auto dev : vk_devices) {
-        vkDestroyDevice(dev, nullptr);
-    }
-
-    vkDestroyInstance(instance, nullptr);
-*/
 
     printf("main exit.\n");
 
@@ -379,4 +240,92 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height)
     // make sure the viewport matches the new window dimensions; note that width and 
     // height will be significantly larger than specified on retina displays.
     glViewport(0, 0, width, height);
+
+    if ((width != g_vk_dst_tex->Width()) || (height != g_vk_dst_tex->Height())) {
+        auto it = g_gl_ext_texs.find(texture1);
+        if (it != g_gl_ext_texs.end()) {
+            glDeleteMemoryObjectsEXT(1, &(it->second));
+            glDeleteTextures(1, &(it->first));
+            g_gl_ext_texs.erase(it);
+        }
+
+        HANDLE dst_mem_hnd;
+        size_t dst_mem_size;
+        g_vk_dst_tex = std::make_shared<VulkanTexture>(g_vk_context);
+        int vk_ret = g_vk_dst_tex->CreateWinGlSharedTexture(VK_FORMAT_R8G8B8A8_UNORM,
+                                                    width,
+                                                    height,
+                                                    VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                                                    VK_IMAGE_TILING_OPTIMAL,
+                                                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                                    VK_IMAGE_LAYOUT_UNDEFINED,
+                                                    dst_mem_hnd,
+                                                    dst_mem_size);
+        CHECK_RETURN_IF(0 != vk_ret, CHECK_VOID);
+        // opengl texture1
+        texture1 = GetGLExternalTexture(dst_mem_hnd, dst_mem_size, GL_RGBA8, width, height);
+        CHECK_RETURN_IF(0 == texture1, CHECK_VOID);
+        
+
+        g_vk_pipeline->Bind(2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, g_vk_dst_tex->DescriptorInfo());
+        g_vk_pipeline->UpdateBindings();
+
+        g_vk_cmd_buf->Begin();
+        g_vk_cmd_buf->BindPipeline(g_vk_pipeline);
+        g_vk_cmd_buf->Dispatch(width, width);
+        g_vk_cmd_buf->End();
+    }
+}
+
+GLuint GetGLExternalTexture(const HANDLE mem_hnd, size_t mem_size, GLenum internal_format, int width, int height) {
+    GLuint gl_tex = 0;
+    GLuint mem = 0;
+    GLenum gl_err = GL_NO_ERROR;
+    do {
+        glCreateMemoryObjectsEXT(1, &mem);
+        if (!mem) {
+            std::cout << __FUNCTION__ << ": glCreateMemoryObjectsEXT failed:" << glGetError();
+            break;
+        };
+
+		glImportMemoryWin32HandleEXT(mem, mem_size, GL_HANDLE_TYPE_OPAQUE_WIN32_EXT, mem_hnd);
+        gl_err = glGetError();
+        if (gl_err != GL_NO_ERROR) {
+            std::cout << __FUNCTION__ << ": glImportMemoryWin32HandleEXT failed:" << gl_err;
+            break;
+        }
+        glCreateTextures(GL_TEXTURE_2D, 1, &gl_tex);
+        if (!gl_tex) {
+            std::cout << __FUNCTION__ << ": glCreateTextures failed:" << glGetError();
+            break;
+        }
+
+        glTextureStorageMem2DEXT(gl_tex, 1, internal_format, width, height, mem, 0);
+        gl_err = glGetError();
+        if (gl_err != GL_NO_ERROR) {
+            std::cout << __FUNCTION__ << ": glTextureStorageMem2DEXT failed:" << gl_err;
+            glDeleteTextures(1, &gl_tex);
+            gl_tex = 0;
+            break;
+        }
+    } while(0);
+
+    if ((0 == gl_tex) && (0 != mem)) {
+        glDeleteMemoryObjectsEXT(1, &mem);
+        mem = 0;
+    }
+
+    if (0 != gl_tex) {
+        g_gl_ext_texs[gl_tex] = mem;
+    }
+    
+    glBindTexture(GL_TEXTURE_2D, gl_tex);
+     // set the texture wrapping parameters
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    // set texture filtering parameters
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    return gl_tex;
 }

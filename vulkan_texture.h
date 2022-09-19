@@ -3,8 +3,9 @@
 
 #include "vulkan_context.h"
 
-class VulkanTexture : public VulkanResourceOnDevice {
+class VulkanTexture : public VulkanResourceOnDevice<VkImage> {
 public:
+    using VulkanResourceOnDevice::VulkanResourceOnDevice;
     virtual ~VulkanTexture() override;
     int CreateWinGlSharedTexture(VkFormat format,
                                  uint32_t width,
@@ -18,12 +19,12 @@ public:
 
     uint32_t Width() { return tex_w_; }
     uint32_t Height() { return tex_h_; }
+    const void* DescriptorInfo() { return reinterpret_cast<void*>(&desc_image_info_); }
 
 private:
-    VkImage image_ = VK_NULL_HANDLE;
     VkDeviceMemory memory_ = VK_NULL_HANDLE;
     VkImageView image_view_ = VK_NULL_HANDLE;
-    VkDescriptorImageInfo texture_image_info_ = {};
+    VkDescriptorImageInfo desc_image_info_ = {};
     uint32_t tex_w_ = 0;
     uint32_t tex_h_ = 0;
     uint64_t mem_size_ = 0;

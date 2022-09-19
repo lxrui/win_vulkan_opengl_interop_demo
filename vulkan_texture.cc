@@ -1,11 +1,11 @@
 #include "vulkan_texture.h"
 
 VulkanTexture::~VulkanTexture() {
-    if (image_view_ != VK_NULL_HANDLE) {
+    if (image_view_) {
         vkDestroyImageView(device_, image_view_, nullptr);
     }
-    if (image_ != VK_NULL_HANDLE) {
-        vkDestroyImage(device_, image_, nullptr);
+    if (vk_resource_) {
+        vkDestroyImage(device_, vk_resource_, nullptr);
     }
     if (memory_) {
         vkFreeMemory(device_, memory_, nullptr);
@@ -81,10 +81,10 @@ int VulkanTexture::CreateWinGlSharedTexture(VkFormat format,
     image_createInfo.pQueueFamilyIndices = &queue_idx;
     image_createInfo.initialLayout = init_layout;
 
-    VK_CALL(vkCreateImage(device_, &image_createInfo, nullptr, &image_));
+    VK_CALL(vkCreateImage(device_, &image_createInfo, nullptr, &vk_resource_));
 
     VkMemoryRequirements memory_requirements;
-    vkGetImageMemoryRequirements(device_, image_, &memory_requirements);
+    vkGetImageMemoryRequirements(device_, vk_resource_, &memory_requirements);
 
     int memory_type_index = ctx_->FindMemoryType(memory_requirements.memoryTypeBits, mem_flag);
     CHECK_RETURN_IF(memory_type_index < 0, -1);
@@ -96,7 +96,7 @@ int VulkanTexture::CreateWinGlSharedTexture(VkFormat format,
     VkMemoryDedicatedAllocateInfo dedicate_mem_info = {};
     if (enable_dedicated_mem) {
         dedicate_mem_info.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
-        dedicate_mem_info.image = image_;
+        dedicate_mem_info.image = vk_resource_;
         export_mem_alloc_info.pNext = &dedicate_mem_info;
     }
 
@@ -106,11 +106,11 @@ int VulkanTexture::CreateWinGlSharedTexture(VkFormat format,
     memory_allocate_info.memoryTypeIndex = uint32_t(memory_type_index);
     memory_allocate_info.pNext = &export_mem_alloc_info;
     VK_CALL(vkAllocateMemory(device_, &memory_allocate_info, nullptr, &memory_));
-    VK_CALL(vkBindImageMemory(device_, image_, memory_, 0));
+    VK_CALL(vkBindImageMemory(device_, vk_resource_, memory_, 0));
 
     VkImageViewCreateInfo image_view_create_info = {};
     image_view_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    image_view_create_info.image = image_;
+    image_view_create_info.image = vk_resource_;
     image_view_create_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
     image_view_create_info.format = format;
     image_view_create_info.components = {VK_COMPONENT_SWIZZLE_IDENTITY,
@@ -128,9 +128,9 @@ int VulkanTexture::CreateWinGlSharedTexture(VkFormat format,
     VK_CALL(vkGetMemoryWin32HandleKHR(device_, &get_win32_handle_info, &win32_ext_mem_handle));
     win32_ext_mem_handle_ = win32_ext_mem_handle;
 
-    texture_image_info_.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-    texture_image_info_.imageView = image_view_;
-    texture_image_info_.sampler = VK_NULL_HANDLE;
+    desc_image_info_.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    desc_image_info_.imageView = image_view_;
+    desc_image_info_.sampler = VK_NULL_HANDLE;
 
     tex_w_ = width;
     tex_h_ = height;

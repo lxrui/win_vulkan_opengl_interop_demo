@@ -16,10 +16,14 @@ add_executable(${PROJECT_NAME}
     vulkan_context.cc
     vulkan_command_buffer.h
     vulkan_command_buffer.cc
-    vulkan_pipeline.h
-    vulkan_pipeline.cc
+    vulkan_compute_pipeline.h
+    vulkan_compute_pipeline.cc
+    vulkan_shader.h
+    vulkan_shader.cc
     vulkan_texture.h
     vulkan_texture.cc
+    vulkan_sampler.h
+    vulkan_sampler.cc
     glad/src/glad.c
 )
 
