@@ -24,6 +24,8 @@ add_executable(${PROJECT_NAME}
     vulkan_texture.cc
     vulkan_sampler.h
     vulkan_sampler.cc
+    vulkan_semaphore.h
+    vulkan_semaphore.cc
     glad/src/glad.c
 )
 

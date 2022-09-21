@@ -41,16 +41,17 @@ int VulkanCommandBuffer::End() {
 
 void VulkanCommandBuffer::BindPipeline(const std::shared_ptr<VulkanComputePipeline>& pipeline) {
     CHECK_RETURN_IF(!pipeline, CHECK_VOID);
-    pl_ = pipeline;
-    vkCmdBindPipeline(vk_resource_, VK_PIPELINE_BIND_POINT_COMPUTE, pl_->VkType());
-    vkCmdBindDescriptorSets(vk_resource_, VK_PIPELINE_BIND_POINT_COMPUTE, pl_->pipeline_layout_, 0, 1, &pl_->descriptor_set_, 0, 0);
+    pipelines_.push_back(pipeline);
+    vkCmdBindPipeline(vk_resource_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline->VkType());
+    vkCmdBindDescriptorSets(vk_resource_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline->pipeline_layout_, 0, 1, &pipeline->descriptor_set_, 0, 0);
 }
 
-void VulkanCommandBuffer::Dispatch(int x, int y) {
+void VulkanCommandBuffer::Dispatch(uint32_t x, uint32_t y) {
     CHECK_RETURN_IF(x * y == 0, CHECK_VOID);
-    CHECK_RETURN_IF(!pl_, CHECK_VOID);
-    uint32_t group_count_x = (x + pl_->local_size_x_ - 1) / pl_->local_size_x_;
-    uint32_t group_count_y = (y + pl_->local_size_y_ - 1) / pl_->local_size_y_;
+    CHECK_RETURN_IF(pipelines_.empty(), CHECK_VOID);
+    auto& pl = pipelines_.back();
+    uint32_t group_count_x = (x + pl->local_size_x_ - 1) / pl->local_size_x_;
+    uint32_t group_count_y = (y + pl->local_size_y_ - 1) / pl->local_size_y_;
     vkCmdDispatch(vk_resource_, group_count_x, group_count_y, 1);
 }
 
@@ -60,11 +61,11 @@ int VulkanCommandBuffer::Submit() {
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &vk_resource_;
-    submitInfo.waitSemaphoreCount = 0;
-    submitInfo.pWaitSemaphores = nullptr;
-    submitInfo.pWaitDstStageMask = 0;
-    submitInfo.signalSemaphoreCount = 0;
-    submitInfo.pSignalSemaphores = nullptr;
+    submitInfo.waitSemaphoreCount = static_cast<uint32_t>(vk_wait_semaphores_.size());
+    submitInfo.pWaitSemaphores = vk_wait_semaphores_.data();
+    submitInfo.pWaitDstStageMask = wait_pipeline_stages_.data();
+    submitInfo.signalSemaphoreCount = static_cast<uint32_t>(vk_signal_semaphores_.size());
+    submitInfo.pSignalSemaphores = vk_signal_semaphores_.data();
 
 	vkResetFences(device_, 1, &fence_);
     VK_CALL(vkQueueSubmit(ctx_->Queue(), 1, &submitInfo, fence_));

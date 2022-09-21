@@ -71,9 +71,10 @@ int VulkanContext::CreateInstance() {
 
     for (auto& it : check_instance_exts) {
         if (!it.second) {
-            std::cout << "instance not support extension: " << it.first;
+            std::cout << "instance not support extension: " << it.first << "\n";
         }
     }
+    std::cout << std::endl;
     
     // Create Vulkan instance
     VkInstanceCreateInfo instance_create_info = {};
@@ -85,6 +86,12 @@ int VulkanContext::CreateInstance() {
     // Create vulkan Instance
     VK_CALL(vkCreateInstance(&instance_create_info, nullptr, &instance_));
 
+#define GET_INSTANCE_PROC(fun) fun = reinterpret_cast<PFN_##fun>(vkGetInstanceProcAddr(instance_, #fun))
+    GET_INSTANCE_PROC(vkGetPhysicalDeviceExternalSemaphoreProperties);
+#ifdef WIN32
+    GET_INSTANCE_PROC(vkGetPhysicalDeviceExternalImageFormatPropertiesNV);
+#endif // #ifdef WIN32
+#undef GET_INSTANCE_PROC
     return 0;
 }
 
@@ -156,7 +163,7 @@ int VulkanContext::CreateDevice() {
     std::cout << "\ndriver version                    : " << DriverVersionString(device_props_);
     std::cout << "\nAPI version                       : " << vulkanResources::versionToString(device_props_.apiVersion);
     std::cout << "\nmax push constan size             : " << device_props_.limits.maxPushConstantsSize << " B";
-    std::cout << "\nmax uniform buffer size           : " << device_props_.limits.maxUniformBufferRange << " B";
+    std::cout << "\nmax uniform buffer size           : " << (device_props_.limits.maxUniformBufferRange >> 20) << " MB";
     std::cout << "\nmax compute work group Invocations: " << device_props_.limits.maxComputeWorkGroupInvocations << std::endl;
 
     std::vector<VkExtensionProperties> device_extensions;
@@ -184,6 +191,7 @@ int VulkanContext::CreateDevice() {
     check_device_exts[VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME] = false;
 #endif
 #ifdef WIN32
+    check_device_exts[VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME] = false;
     check_device_exts[VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME] = false;
     check_device_exts[VK_NV_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME] = false;
 #endif
@@ -198,9 +206,10 @@ int VulkanContext::CreateDevice() {
 
     for (auto& it : check_device_exts) {
         if (!it.second) {
-            std::cout << "device not support extension: " << it.first << std::endl;
+            std::cout << "device not support extension: " << it.first << "\n";
         }
     }
+    std::cout << std::endl;
     
     uint32_t queue_family_count = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(physical_device_, &queue_family_count, nullptr);
@@ -245,16 +254,14 @@ int VulkanContext::CreateDevice() {
 
     VK_CALL(vkCreateDevice(physical_device_, &device_create_info, nullptr, &device_));
 
-#ifdef WIN32
-#define GET_INSTANCE_PROC(fun) fun = reinterpret_cast<PFN_##fun>(vkGetInstanceProcAddr(instance_, #fun))
-    GET_INSTANCE_PROC(vkGetPhysicalDeviceExternalImageFormatPropertiesNV);
-#undef GET_INSTANCE_PROC
-
 #define GET_DEVICE_PROC(fun) fun = reinterpret_cast<PFN_##fun>(vkGetDeviceProcAddr(device_, #fun))
+
+#ifdef WIN32
+    GET_DEVICE_PROC(vkGetSemaphoreWin32HandleKHR);
     GET_DEVICE_PROC(vkGetMemoryWin32HandleKHR);
     GET_DEVICE_PROC(vkGetMemoryWin32HandleNV);
-#undef GET_DEVICE_PROC
 #endif // #ifdef WIN32
+#undef GET_DEVICE_PROC
 
     vkGetDeviceQueue(device_, queue_index_, 0, &queue_);
 

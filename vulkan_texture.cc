@@ -17,16 +17,17 @@ VulkanTexture::~VulkanTexture() {
 #endif
 }
 
-int VulkanTexture::CreateWinGlSharedTexture(VkFormat format,
-                                            uint32_t width,
-                                            uint32_t height,
-                                            VkImageUsageFlags usage,
-                                            VkImageTiling tiling,
-                                            VkMemoryPropertyFlags mem_flag,
-                                            VkImageLayout init_layout,
-                                            HANDLE &win32_ext_mem_handle,
-                                            uint64_t &memory_size)
+int VulkanTexture::CreateWin32GlSharedTexture(VkFormat format,
+                                              uint32_t width,
+                                              uint32_t height,
+                                              VkImageUsageFlags usage,
+                                              VkImageTiling tiling,
+                                              VkMemoryPropertyFlags mem_flag,
+                                              VkImageLayout init_layout,
+                                              HANDLE &win32_ext_mem_handle,
+                                              uint64_t &memory_size)
 {
+#ifdef WIN32
     constexpr VkExternalMemoryHandleTypeFlagBits ext_mem_handle_type = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
     uint32_t queue_idx = ctx_->QueueIndex();
 
@@ -136,7 +137,7 @@ int VulkanTexture::CreateWinGlSharedTexture(VkFormat format,
     tex_h_ = height;
     mem_size_ = memory_requirements.size;
     memory_size = mem_size_;
-
+#endif //#ifdef WIN32
     return 0;
 }
 

@@ -55,7 +55,7 @@ public:
 	VulkanResourceOnDevice(const VulkanResourceOnDevice&) = delete;
     VulkanResourceOnDevice& operator=(const VulkanResourceOnDevice&) = delete;
     virtual ~VulkanResourceOnDevice() {};
-    T VkType() { return vk_resource_; }
+    const T VkType() { return vk_resource_; }
     
 protected:	
     std::shared_ptr<VulkanContext> ctx_;
